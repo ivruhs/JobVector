@@ -1,9 +1,3 @@
-// EmbeddingService.js
-import { env } from "@xenova/transformers";
-
-// ⚙️ Configure Xenova ONNX WebAssembly backend
-env.backends.onnx.wasm.numThreads = 1;
-
 import { pipeline } from "@xenova/transformers";
 
 class EmbeddingService {
