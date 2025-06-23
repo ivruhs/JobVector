@@ -132,9 +132,24 @@ const AnalysisResults = () => {
     }
   };
 
-  const score = Math.round(
-    results.overallSimilarityScore * 0.6 + results.semanticScore * 0.4
-  );
+  let score;
+
+  if (
+    results.overallSimilarityScore > 78 ||
+    results.overallSimilarityScore < 36
+  ) {
+    score = Math.round(
+      results.overallSimilarityScore * 0.6 + results.semanticScore * 0.4
+    );
+  } else if (
+    results.overallSimilarityScore >= 36 &&
+    results.overallSimilarityScore <= 78
+  ) {
+    score = Math.round(
+      results.overallSimilarityScore * 0.3 + results.semanticScore * 0.7
+    );
+  }
+
   // console.log(score);
 
   return (
