@@ -1,21 +1,31 @@
-import { pipeline } from "@xenova/transformers";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 class EmbeddingService {
   constructor() {
+    this.genAI = null;
     this.model = null;
-    this.modelName = "Xenova/all-MiniLM-L6-v2";
-    this.maxTokens = 512;
+    this.modelName = "text-embedding-004";
+    this.maxTokens = 2048; // Gemini text-embedding-004 supports up to 2048 tokens
     this.minChunkLength = 27; // Increased from 20
+    this.embeddingDimension = 768; // Gemini text-embedding-004 produces 768-dimensional vectors
   }
 
   /**
-   * Initialize the embedding model
+   * Initialize the Gemini embedding model
    */
   async initialize() {
     if (!this.model) {
-      console.log("Loading embedding model...");
-      this.model = await pipeline("feature-extraction", this.modelName);
-      console.log("Embedding model loaded successfully");
+      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+      if (!apiKey) {
+        throw new Error(
+          "GEMINI_API_KEY or GOOGLE_API_KEY environment variable is required"
+        );
+      }
+
+      console.log("Initializing Gemini embedding model...");
+      this.genAI = new GoogleGenerativeAI(apiKey);
+      this.model = this.genAI.getGenerativeModel({ model: this.modelName });
+      console.log("Gemini embedding model initialized successfully");
     }
   }
 
@@ -88,7 +98,7 @@ class EmbeddingService {
       }
 
       const words = text.split(/\s+/);
-      const estimatedTokens = Math.ceil(words.length / 0.75);
+      const estimatedTokens = Math.ceil(words.length / 0.75); // Rough estimation
 
       if (estimatedTokens <= this.maxTokens) {
         processedChunks.push(chunk);
@@ -127,7 +137,61 @@ class EmbeddingService {
   }
 
   /**
-   * Enhanced embedding generation with better error handling
+   * Improved vector validation function
+   * @param {*} vector - Vector to validate
+   * @returns {boolean} - Whether the vector is valid
+   */
+  isValidVector(vector) {
+    // Check if it's an array
+    if (!Array.isArray(vector)) {
+      console.warn("⚠️ Vector is not an array:", typeof vector);
+      return false;
+    }
+
+    // Check dimensions
+    if (vector.length !== this.embeddingDimension) {
+      console.warn(
+        `⚠️ Vector has wrong dimensions: ${vector.length}, expected: ${this.embeddingDimension}`
+      );
+      return false;
+    }
+
+    // Check for invalid values - use more precise validation
+    for (let i = 0; i < vector.length; i++) {
+      const value = vector[i];
+
+      // Check for null, undefined
+      if (value === null || value === undefined) {
+        console.warn(`⚠️ Vector contains null/undefined at index ${i}`);
+        return false;
+      }
+
+      // Check for NaN
+      if (Number.isNaN(value)) {
+        console.warn(`⚠️ Vector contains NaN at index ${i}`);
+        return false;
+      }
+
+      // Check if it's a valid number
+      if (typeof value !== "number") {
+        console.warn(
+          `⚠️ Vector contains non-number at index ${i}: ${typeof value}`
+        );
+        return false;
+      }
+
+      // Check for infinity
+      if (!Number.isFinite(value)) {
+        console.warn(`⚠️ Vector contains infinite value at index ${i}`);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Generate embeddings using Gemini text-embedding-004
    * @param {Array} texts - Array of text strings
    * @returns {Array} - Array of embedding vectors
    */
@@ -139,7 +203,7 @@ class EmbeddingService {
     }
 
     const embeddings = [];
-    const batchSize = 5;
+    const batchSize = 10; // Gemini can handle larger batches efficiently
     let processedCount = 0;
 
     for (let i = 0; i < texts.length; i += batchSize) {
@@ -152,47 +216,93 @@ class EmbeddingService {
       );
 
       try {
-        const batchEmbeddings = await this.model(batch, {
-          pooling: "mean",
-          normalize: true,
-        });
-
-        if (batchEmbeddings?.data && batchEmbeddings?.dims) {
-          const data = batchEmbeddings.data;
-          const dims = batchEmbeddings.dims;
-
-          if (dims.length === 2) {
-            // Batch of embeddings: [batch_size, dim]
-            const [batchSize, dim] = dims;
-            for (let j = 0; j < batchSize; j++) {
-              const start = j * dim;
-              const end = start + dim;
-              const vector = Array.from(data.slice(start, end));
-              embeddings.push(this.normalizeVector(vector));
-              processedCount++;
+        // Process batch - Gemini embedding API handles multiple texts
+        const batchEmbeddings = await Promise.all(
+          batch.map(async (text) => {
+            if (!text || text.trim().length === 0) {
+              console.warn("⚠️ Skipping empty text");
+              return new Array(this.embeddingDimension).fill(0);
             }
-          } else if (dims.length === 1) {
-            // Single embedding: [dim]
-            const vector = Array.from(data);
-            embeddings.push(this.normalizeVector(vector));
-            processedCount++;
-          } else {
-            throw new Error(
-              `Unexpected embedding dimensions: ${JSON.stringify(dims)}`
-            );
-          }
-        } else {
-          throw new Error("Embedding output missing `.data` or `.dims`");
-        }
+
+            try {
+              const result = await this.model.embedContent(text.trim());
+
+              // Extract embedding values
+              const embeddingValues = result.embedding.values;
+
+              // Validate embedding values
+              if (
+                !Array.isArray(embeddingValues) ||
+                embeddingValues.length !== this.embeddingDimension
+              ) {
+                console.warn(
+                  `⚠️ Invalid embedding dimensions: expected ${this.embeddingDimension}, got ${embeddingValues?.length}`
+                );
+                console.warn(`   Text preview: "${text.substring(0, 50)}..."`);
+                return new Array(this.embeddingDimension).fill(0);
+              }
+
+              // Convert to proper numbers and validate
+              const cleanValues = embeddingValues.map((val, index) => {
+                if (val === null || val === undefined) {
+                  console.warn(`⚠️ Found null/undefined at index ${index}`);
+                  return 0;
+                }
+
+                const numVal = Number(val);
+                if (Number.isNaN(numVal)) {
+                  console.warn(
+                    `⚠️ Found NaN at index ${index}, original value: ${val}`
+                  );
+                  return 0;
+                }
+
+                if (!Number.isFinite(numVal)) {
+                  console.warn(
+                    `⚠️ Found infinite value at index ${index}: ${val}`
+                  );
+                  return 0;
+                }
+
+                return numVal;
+              });
+
+              // Normalize the vector
+              const normalizedVector = this.normalizeVector(cleanValues);
+
+              // Final validation
+              if (!this.isValidVector(normalizedVector)) {
+                console.warn(
+                  "⚠️ Vector failed final validation, returning zero vector"
+                );
+                return new Array(this.embeddingDimension).fill(0);
+              }
+
+              return normalizedVector;
+            } catch (error) {
+              console.error(
+                `❌ Failed to embed individual text:`,
+                error.message
+              );
+              console.error(`   Text preview: "${text.substring(0, 100)}..."`);
+              return new Array(this.embeddingDimension).fill(0);
+            }
+          })
+        );
+
+        embeddings.push(...batchEmbeddings);
+        processedCount += batch.length;
 
         console.log(
           `✅ Batch ${batchNum} completed (${processedCount}/${texts.length} total)`
         );
+
+        // Add a small delay to respect rate limits
+        if (batchNum < totalBatches) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
       } catch (error) {
-        console.error(
-          `❌ Batch ${batchNum} failed, processing individually:`,
-          error.message
-        );
+        console.error(`❌ Batch ${batchNum} failed:`, error.message);
 
         // Fallback to individual processing
         for (let j = 0; j < batch.length; j++) {
@@ -200,55 +310,75 @@ class EmbeddingService {
           try {
             if (!text || text.trim().length === 0) {
               console.warn("⚠️ Skipping empty text in batch fallback");
+              embeddings.push(new Array(this.embeddingDimension).fill(0));
               continue;
             }
 
-            const single = await this.model(text, {
-              pooling: "mean",
-              normalize: true,
-            });
+            const result = await this.model.embedContent(text.trim());
+            const embeddingValues = result.embedding.values;
 
-            if (single?.data && single?.dims) {
-              const vector = Array.from(single.data);
-              embeddings.push(this.normalizeVector(vector));
-              processedCount++;
+            // Validate and clean embedding values
+            if (
+              !Array.isArray(embeddingValues) ||
+              embeddingValues.length !== this.embeddingDimension
+            ) {
+              console.warn(
+                `⚠️ Invalid embedding in fallback for text: "${text.substring(
+                  0,
+                  50
+                )}..."`
+              );
+              embeddings.push(new Array(this.embeddingDimension).fill(0));
             } else {
-              throw new Error("Invalid embedding format for single text");
+              // Convert to array and clean values
+              const cleanValues = embeddingValues.map((val) => {
+                if (val === null || val === undefined) return 0;
+                const numVal = Number(val);
+                return Number.isNaN(numVal) || !Number.isFinite(numVal)
+                  ? 0
+                  : numVal;
+              });
+
+              const normalizedVector = this.normalizeVector(cleanValues);
+              embeddings.push(
+                this.isValidVector(normalizedVector)
+                  ? normalizedVector
+                  : new Array(this.embeddingDimension).fill(0)
+              );
             }
+
+            processedCount++;
           } catch (singleError) {
             console.error(
-              `❌ Failed to embed text ${i + j}:`,
+              `❌ Failed to embed text ${i + j} in fallback:`,
               singleError.message
             );
             console.error(`   Text preview: "${text.substring(0, 100)}..."`);
 
-            // Create a zero vector as fallback (will have zero similarity)
-            const zeroVector = new Array(384).fill(0); // all-MiniLM-L6-v2 has 384 dimensions
-            embeddings.push(zeroVector);
+            // Create a zero vector as fallback
+            embeddings.push(new Array(this.embeddingDimension).fill(0));
             processedCount++;
           }
         }
       }
     }
 
-    console.log(
-      `✅ Generated ${embeddings.length} embeddings (${processedCount} processed)`
-    );
-
-    // Validate all embeddings
-    const validEmbeddings = embeddings.filter((emb) => {
-      return (
-        Array.isArray(emb) && emb.length > 0 && emb.some((val) => val !== 0)
-      );
+    // Final validation of all embeddings
+    const validatedEmbeddings = embeddings.map((embedding, index) => {
+      if (!this.isValidVector(embedding)) {
+        console.error(
+          `❌ Invalid embedding at index ${index}, replacing with zero vector`
+        );
+        return new Array(this.embeddingDimension).fill(0);
+      }
+      return embedding;
     });
 
-    if (validEmbeddings.length < embeddings.length * 0.5) {
-      console.warn(
-        `⚠️ Many embeddings failed: ${validEmbeddings.length}/${embeddings.length} valid`
-      );
-    }
+    console.log(
+      `✅ Generated ${validatedEmbeddings.length} embeddings (${processedCount} processed)`
+    );
 
-    return embeddings;
+    return validatedEmbeddings;
   }
 
   /**
@@ -257,28 +387,36 @@ class EmbeddingService {
    * @returns {Array} - Normalized vector
    */
   normalizeVector(vector) {
-    if (!Array.isArray(vector) || vector.length === 0) {
-      console.warn("⚠️ Invalid vector for normalization:", vector);
-      return new Array(384).fill(0);
+    if (!Array.isArray(vector) || vector.length !== this.embeddingDimension) {
+      console.warn(
+        "⚠️ Invalid vector for normalization:",
+        vector?.length || "undefined"
+      );
+      return new Array(this.embeddingDimension).fill(0);
     }
 
+    // Ensure all values are valid numbers
+    const cleanVector = vector.map((val) => {
+      if (val === null || val === undefined) return 0;
+      const numVal = Number(val);
+      return Number.isNaN(numVal) || !Number.isFinite(numVal) ? 0 : numVal;
+    });
+
     const magnitude = Math.sqrt(
-      vector.reduce((sum, val) => sum + val * val, 0)
+      cleanVector.reduce((sum, val) => sum + val * val, 0)
     );
 
     if (magnitude === 0) {
       console.warn("⚠️ Zero magnitude vector encountered");
-      return vector;
+      return cleanVector; // Return the clean vector even if magnitude is 0
     }
 
-    const normalized = vector.map((val) => val / magnitude);
+    const normalized = cleanVector.map((val) => val / magnitude);
 
-    // Validate normalization
-    const newMagnitude = Math.sqrt(
-      normalized.reduce((sum, val) => sum + val * val, 0)
-    );
-    if (Math.abs(newMagnitude - 1.0) > 0.001) {
-      console.warn(`⚠️ Normalization failed: magnitude = ${newMagnitude}`);
+    // Validate normalization result
+    if (!this.isValidVector(normalized)) {
+      console.error("❌ Normalization produced invalid values");
+      return new Array(this.embeddingDimension).fill(0);
     }
 
     return normalized;
@@ -355,23 +493,33 @@ class EmbeddingService {
 
     for (const chunk of processedChunks) {
       if (chunk.text.trim().length >= this.minChunkLength) {
+        const embedding = embeddings[embeddingIndex];
+
+        // Validate each embedding before adding to chunk
+        if (!this.isValidVector(embedding)) {
+          console.error(`❌ Invalid embedding for chunk ${chunk.id}, skipping`);
+          embeddingIndex++;
+          continue;
+        }
+
         chunksWithEmbeddings.push({
           ...chunk,
-          vector: embeddings[embeddingIndex],
-          embeddingQuality: this.assessEmbeddingQuality(
-            embeddings[embeddingIndex]
-          ),
+          vector: embedding,
+          embeddingQuality: this.assessEmbeddingQuality(embedding),
         });
         embeddingIndex++;
       }
     }
 
     console.log(
-      `✅ Embedding generation completed: ${chunksWithEmbeddings.length} chunks with embeddings`
+      `✅ Embedding generation completed: ${chunksWithEmbeddings.length} chunks with valid embeddings`
     );
-    console.log(
-      `📊 Sample embedding stats: length=${embeddings[0]?.length}, quality=${chunksWithEmbeddings[0]?.embeddingQuality}`
-    );
+
+    if (chunksWithEmbeddings.length > 0) {
+      console.log(
+        `📊 Sample embedding stats: length=${chunksWithEmbeddings[0].vector.length}, quality=${chunksWithEmbeddings[0].embeddingQuality}`
+      );
+    }
 
     return chunksWithEmbeddings;
   }
@@ -382,7 +530,7 @@ class EmbeddingService {
    * @returns {string} - Quality assessment
    */
   assessEmbeddingQuality(vector) {
-    if (!Array.isArray(vector) || vector.length === 0) return "invalid";
+    if (!this.isValidVector(vector)) return "invalid";
 
     const magnitude = Math.sqrt(
       vector.reduce((sum, val) => sum + val * val, 0)
@@ -405,15 +553,8 @@ class EmbeddingService {
    * @returns {number} - Cosine similarity score
    */
   calculateCosineSimilarity(vectorA, vectorB) {
-    if (!Array.isArray(vectorA) || !Array.isArray(vectorB)) {
+    if (!this.isValidVector(vectorA) || !this.isValidVector(vectorB)) {
       console.warn("⚠️ Invalid vectors for similarity calculation");
-      return 0;
-    }
-
-    if (vectorA.length !== vectorB.length) {
-      console.warn(
-        `⚠️ Vector length mismatch: ${vectorA.length} vs ${vectorB.length}`
-      );
       return 0;
     }
 
@@ -430,6 +571,16 @@ class EmbeddingService {
 
     // Clamp to valid range
     return Math.max(-1, Math.min(1, similarity));
+  }
+
+  /**
+   * Generate embedding for a single query (useful for search)
+   * @param {string} query - Query text
+   * @returns {Array} - Embedding vector
+   */
+  async generateQueryEmbedding(query) {
+    const embeddings = await this.generateEmbeddings([query]);
+    return embeddings[0];
   }
 }
 

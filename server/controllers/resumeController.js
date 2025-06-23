@@ -139,6 +139,11 @@ export const generateResumeEmbeddings = async (req, res) => {
       transformedChunks
     );
 
+    // Get the expected dimension from the embedding service
+    const expectedDimension = embeddingService.embeddingDimension; // 768 for Gemini
+
+    console.log(`Expected embedding dimension: ${expectedDimension}`);
+
     // Final safety check: sanitize vectors
     for (let i = 0; i < chunksWithEmbeddings.length; i++) {
       let vector = chunksWithEmbeddings[i].vector;
@@ -149,21 +154,44 @@ export const generateResumeEmbeddings = async (req, res) => {
         chunksWithEmbeddings[i].vector = vector;
       }
 
-      // Validate vector
+      // Validate vector with correct dimension
       if (
         !vector ||
-        vector.length !== 384 ||
+        vector.length !== expectedDimension ||
         vector.some((v) => typeof v !== "number" || !isFinite(v))
       ) {
+        console.error(`❌ Chunk at index ${i} validation details:`, {
+          hasVector: !!vector,
+          vectorLength: vector?.length,
+          expectedLength: expectedDimension,
+          chunkId: chunksWithEmbeddings[i].id,
+          chunkType: chunksWithEmbeddings[i].type,
+          vectorSample: vector?.slice(0, 5),
+          invalidValues:
+            vector?.filter((v) => typeof v !== "number" || !isFinite(v))
+              .length || 0,
+        });
+
         throw new Error(
-          `Chunk at index ${i} has invalid vector values (null/undefined/NaN): ${JSON.stringify(
-            vector
-          )}`
+          `Chunk at index ${i} (ID: ${chunksWithEmbeddings[i].id}) has invalid vector: ` +
+            `Expected ${expectedDimension} dimensions, got ${
+              vector?.length || "undefined"
+            }. ` +
+            `Invalid values: ${
+              vector?.filter((v) => typeof v !== "number" || !isFinite(v))
+                .length || 0
+            }`
         );
       }
     }
 
-    console.log(`✅ Vectors validated. Storing in Supabase...`);
+    console.log(
+      `✅ All ${chunksWithEmbeddings.length} vectors validated successfully`
+    );
+    console.log(
+      `📊 Vector dimensions: ${expectedDimension}, Sample values:`,
+      chunksWithEmbeddings[0]?.vector?.slice(0, 3)
+    );
 
     const result = await supabaseClient.storeResumeEmbeddings(
       chunksWithEmbeddings,
@@ -178,12 +206,14 @@ export const generateResumeEmbeddings = async (req, res) => {
         resumeId,
         chunksProcessed: chunksWithEmbeddings.length,
         embeddingDimensions: chunksWithEmbeddings[0].vector.length,
+        expectedDimensions: expectedDimension,
         embeddings: chunksWithEmbeddings.map((chunk) => ({
           id: chunk.id,
           type: chunk.type,
           textPreview: chunk.text.substring(0, 50) + "...",
           vectorLength: chunk.vector.length,
           order: chunk.order,
+          embeddingQuality: chunk.embeddingQuality,
         })),
       },
     });

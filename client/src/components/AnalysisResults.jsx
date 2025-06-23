@@ -72,7 +72,7 @@ const AnalysisResults = () => {
     }, [score]);
 
     const getColor = (score) => {
-      if (score <= 37) return "#ef4444"; // red
+      if (score <= 40) return "#ef4444"; // red
       if (score < 70) return "#f59e0b"; // yellow
       return "#10b981"; // green
     };
@@ -125,7 +125,7 @@ const AnalysisResults = () => {
   const getScoreMessage = (score) => {
     if (score >= 70) {
       return "Excellent match! Your resume aligns very well with the job requirements.";
-    } else if (score > 37) {
+    } else if (score > 40) {
       return "Good match with room for improvement. Consider addressing the skill gaps below.";
     } else {
       return "Poor match. Significant skill development may be needed for this role.";
@@ -188,7 +188,7 @@ const AnalysisResults = () => {
               className={`text-lg max-w-2xl mx-auto ${
                 score >= 70
                   ? "text-green-600"
-                  : score > 37
+                  : score > 40
                   ? "text-yellow-600"
                   : "text-red-600"
               }`}

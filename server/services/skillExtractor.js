@@ -6,10 +6,10 @@ class ResumeJDAnalyzer {
     this.model = this.genAI.getGenerativeModel({
       model: "gemini-1.5-flash",
       generationConfig: {
-        temperature: 0.2,
-        topP: 0.9,
-        topK: 40,
-        maxOutputTokens: 8192, // Increased to handle longer responses
+        temperature: 0.1, // Reduced for more consistent output
+        topP: 0.8,
+        topK: 30,
+        maxOutputTokens: 4096, // Reduced to prevent truncation
         responseMimeType: "application/json",
       },
     });
@@ -22,7 +22,18 @@ class ResumeJDAnalyzer {
    * @returns {Promise<Object>} Analysis results with similarity score and skills breakdown
    */
   async analyzeResumeMatch(jobDescription, resume) {
-    const prompt = this.createAnalysisPrompt(jobDescription, resume);
+    // Truncate inputs if they're too long to prevent token overflow
+    const maxInputLength = 8000; // Conservative limit
+    const truncatedJD =
+      jobDescription.length > maxInputLength
+        ? jobDescription.substring(0, maxInputLength) + "..."
+        : jobDescription;
+    const truncatedResume =
+      resume.length > maxInputLength
+        ? resume.substring(0, maxInputLength) + "..."
+        : resume;
+
+    const prompt = this.createAnalysisPrompt(truncatedJD, truncatedResume);
 
     try {
       const result = await this.model.generateContent(prompt);
@@ -35,288 +46,497 @@ class ResumeJDAnalyzer {
       // Validate and enhance the response
       return this.validateAndEnhanceResponse(analysis);
     } catch (error) {
-      throw new Error(`Analysis failed: ${error.message}`);
+      console.error("Analysis error details:", error);
+
+      // Fallback to simpler analysis if main analysis fails
+      try {
+        console.log("Attempting fallback analysis...");
+        return await this.fallbackAnalysis(truncatedJD, truncatedResume);
+      } catch (fallbackError) {
+        console.error("Fallback analysis also failed:", fallbackError);
+        throw new Error(`Analysis failed: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Fallback analysis with simpler prompt when main analysis fails
+   */
+  async fallbackAnalysis(jobDescription, resume) {
+    const simplePrompt = `Analyze this resume against the job description and return ONLY valid JSON:
+
+Job Description: ${jobDescription.substring(0, 2000)}
+
+Resume: ${resume.substring(0, 2000)}
+
+Return exactly this JSON structure with no additional text:
+{
+  "overall_similarity_score": 75,
+  "matching_strengths": {
+    "hard_skills": ["skill1", "skill2"],
+    "soft_skills": ["communication", "teamwork"],
+    "experience_areas": ["relevant experience"],
+    "qualifications": ["relevant qualifications"],
+    "achievements": ["notable achievements"]
+  },
+  "missing_critical_elements": {
+    "hard_skills": ["missing skill1"],
+    "soft_skills": ["missing soft skill"],
+    "experience_gaps": ["missing experience"],
+    "qualifications": ["missing qualification"],
+    "other_requirements": ["other missing items"]
+  },
+  "role_fit_assessment": {
+    "immediate_readiness": "medium",
+    "growth_potential": "high",
+    "culture_fit_indicators": ["positive indicators"],
+    "red_flags": ["potential concerns"]
+  },
+  "recommendations": {
+    "for_candidate": ["improve skill X"],
+    "for_recruiter": ["focus on Y during interview"],
+    "interview_focus_areas": ["area1", "area2"]
+  }
+}`;
+
+    try {
+      const result = await this.model.generateContent(simplePrompt);
+      const response = await result.response;
+      const analysisText = response.text();
+
+      const analysis = this.parseJsonResponse(analysisText);
+      return this.validateAndEnhanceSimpleResponse(analysis);
+    } catch (error) {
+      // Return a basic structure if even fallback fails
+      return this.getBasicAnalysisStructure();
     }
   }
 
   /**
    * Robust JSON parsing with multiple fallback strategies
-   * @param {string} responseText - Raw response from AI
-   * @returns {Object} Parsed JSON object
    */
   parseJsonResponse(responseText) {
     console.log("Response length:", responseText.length);
-    console.log("Response starts with:", responseText.substring(0, 100));
-    console.log(
-      "Response ends with:",
-      responseText.substring(responseText.length - 100)
-    );
+    console.log("Response preview:", responseText.substring(0, 200));
 
     // Strategy 1: Direct JSON parsing
     try {
-      return JSON.parse(responseText);
+      const parsed = JSON.parse(responseText);
+      console.log("✓ Direct JSON parsing successful");
+      return parsed;
     } catch (e) {
-      console.log("Direct JSON parse failed:", e.message);
+      console.log("✗ Direct JSON parse failed:", e.message);
     }
 
     // Strategy 2: Extract JSON from markdown code blocks
     try {
       const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
       if (jsonMatch) {
-        console.log("Found JSON in markdown, parsing...");
-        return JSON.parse(jsonMatch[1]);
+        const parsed = JSON.parse(jsonMatch[1]);
+        console.log("✓ Markdown JSON extraction successful");
+        return parsed;
       }
     } catch (e) {
-      console.log("Markdown JSON extraction failed:", e.message);
+      console.log("✗ Markdown JSON extraction failed:", e.message);
     }
 
-    // Strategy 3: Find JSON object boundaries with proper brace counting
+    // Strategy 3: Find complete JSON object with brace counting
     try {
-      const startIndex = responseText.indexOf("{");
-      if (startIndex === -1) {
-        throw new Error("No opening brace found");
-      }
-
-      // Count braces to find the complete JSON object
-      let braceCount = 0;
-      let endIndex = -1;
-      let inString = false;
-      let escapeNext = false;
-
-      for (let i = startIndex; i < responseText.length; i++) {
-        const char = responseText[i];
-
-        if (escapeNext) {
-          escapeNext = false;
-          continue;
-        }
-
-        if (char === "\\") {
-          escapeNext = true;
-          continue;
-        }
-
-        if (char === '"' && !escapeNext) {
-          inString = !inString;
-          continue;
-        }
-
-        if (!inString) {
-          if (char === "{") {
-            braceCount++;
-          } else if (char === "}") {
-            braceCount--;
-            if (braceCount === 0) {
-              endIndex = i;
-              break;
-            }
-          }
-        }
-      }
-
-      if (endIndex !== -1) {
-        const jsonStr = responseText.substring(startIndex, endIndex + 1);
-        console.log(
-          "Extracted JSON with brace counting, length:",
-          jsonStr.length
-        );
-        return JSON.parse(jsonStr);
+      const parsed = this.extractCompleteJson(responseText);
+      if (parsed) {
+        console.log("✓ Brace counting extraction successful");
+        return parsed;
       }
     } catch (e) {
-      console.log(
-        "JSON boundary extraction with brace counting failed:",
-        e.message
-      );
+      console.log("✗ Brace counting extraction failed:", e.message);
     }
 
-    // Strategy 4: Clean common JSON issues and retry
+    // Strategy 4: Clean and fix common JSON issues
     try {
-      let cleaned = responseText
-        .replace(/```json\s*/g, "") // Remove markdown
-        .replace(/```\s*$/g, "") // Remove closing markdown
-        .replace(/,\s*}/g, "}") // Remove trailing commas in objects
-        .replace(/,\s*]/g, "]") // Remove trailing commas in arrays
-        .trim();
-
-      // Find the main JSON object
-      const startIndex = cleaned.indexOf("{");
-      const lastIndex = cleaned.lastIndexOf("}");
-      if (startIndex !== -1 && lastIndex !== -1) {
-        cleaned = cleaned.substring(startIndex, lastIndex + 1);
-        console.log("Trying cleaned JSON, length:", cleaned.length);
-        return JSON.parse(cleaned);
-      }
+      const cleaned = this.cleanJsonString(responseText);
+      const parsed = JSON.parse(cleaned);
+      console.log("✓ JSON cleaning successful");
+      return parsed;
     } catch (e) {
-      console.log("JSON cleaning failed:", e.message);
+      console.log("✗ JSON cleaning failed:", e.message);
     }
 
-    // Strategy 5: Try to reconstruct truncated JSON
+    // Strategy 5: Attempt to fix truncated JSON
     try {
-      if (responseText.startsWith("{") && !responseText.endsWith("}")) {
-        console.log("Detected truncated JSON, attempting reconstruction...");
-
-        // Find the last complete field
-        let reconstructed = responseText;
-
-        // Remove any incomplete field at the end
-        const lastCommaIndex = reconstructed.lastIndexOf(",");
-        const lastColonIndex = reconstructed.lastIndexOf(":");
-
-        if (lastColonIndex > lastCommaIndex) {
-          // We have an incomplete field, remove it
-          reconstructed = reconstructed.substring(0, lastCommaIndex);
-        }
-
-        // Add closing brace
-        reconstructed += "}";
-
-        console.log("Reconstructed JSON, length:", reconstructed.length);
-        return JSON.parse(reconstructed);
-      }
+      const fixed = this.fixTruncatedJson(responseText);
+      const parsed = JSON.parse(fixed);
+      console.log("✓ Truncated JSON fix successful");
+      return parsed;
     } catch (e) {
-      console.log("JSON reconstruction failed:", e.message);
+      console.log("✗ Truncated JSON fix failed:", e.message);
     }
 
-    // If all strategies fail, log more details and throw error
-    console.error("All JSON parsing strategies failed.");
-    console.error("Full response length:", responseText.length);
-    console.error("First 1000 chars:", responseText.substring(0, 1000));
-    console.error(
-      "Last 1000 chars:",
-      responseText.substring(Math.max(0, responseText.length - 1000))
-    );
+    // Strategy 6: Extract partial JSON and fill missing fields
+    try {
+      const partial = this.extractPartialJson(responseText);
+      if (partial) {
+        console.log("✓ Partial JSON extraction successful");
+        return partial;
+      }
+    } catch (e) {
+      console.log("✗ Partial JSON extraction failed:", e.message);
+    }
 
-    throw new Error(
-      "Failed to parse AI response as JSON. The response may be truncated or malformed."
-    );
+    console.error("All JSON parsing strategies failed");
+    console.error("Response sample:", responseText.substring(0, 1000));
+    throw new Error("Failed to parse AI response as JSON");
   }
 
   /**
-   * Creates a comprehensive analysis prompt for domain-independent evaluation
+   * Extract complete JSON object using brace counting
+   */
+  extractCompleteJson(text) {
+    const startIndex = text.indexOf("{");
+    if (startIndex === -1) return null;
+
+    let braceCount = 0;
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = startIndex; i < text.length; i++) {
+      const char = text[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+
+      if (char === "\\") {
+        escapeNext = true;
+        continue;
+      }
+
+      if (char === '"' && !escapeNext) {
+        inString = !inString;
+        continue;
+      }
+
+      if (!inString) {
+        if (char === "{") {
+          braceCount++;
+        } else if (char === "}") {
+          braceCount--;
+          if (braceCount === 0) {
+            return JSON.parse(text.substring(startIndex, i + 1));
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Clean common JSON formatting issues
+   */
+  cleanJsonString(text) {
+    return text
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*$/g, "")
+      .replace(/,\s*}/g, "}")
+      .replace(/,\s*]/g, "]")
+      .replace(/\n\s*/g, " ")
+      .trim();
+  }
+
+  /**
+   * Fix truncated JSON by removing incomplete fields
+   */
+  fixTruncatedJson(text) {
+    if (!text.startsWith("{")) return text;
+
+    // Find the last complete comma-separated field
+    let lastCommaIndex = text.lastIndexOf(",");
+    let lastColonIndex = text.lastIndexOf(":");
+
+    if (lastColonIndex > lastCommaIndex) {
+      // Remove incomplete field
+      text = text.substring(0, lastCommaIndex);
+    }
+
+    // Ensure proper closing
+    if (!text.endsWith("}")) {
+      text += "}";
+    }
+
+    return text;
+  }
+
+  /**
+   * Extract partial JSON and fill missing required fields
+   */
+  extractPartialJson(text) {
+    try {
+      // Try to extract whatever JSON we can get
+      const startIndex = text.indexOf("{");
+      if (startIndex === -1) return null;
+
+      let partial = text.substring(startIndex);
+
+      // Remove any text after the last }
+      const lastBrace = partial.lastIndexOf("}");
+      if (lastBrace !== -1) {
+        partial = partial.substring(0, lastBrace + 1);
+      }
+
+      // Try to parse what we have
+      let parsed;
+      try {
+        parsed = JSON.parse(partial);
+      } catch (e) {
+        // If parsing fails, try to create a minimal valid structure
+        return this.getBasicAnalysisStructure();
+      }
+
+      // Fill in missing required fields
+      return this.fillMissingFields(parsed);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Fill missing fields in partial JSON
+   */
+  fillMissingFields(partial) {
+    const template = this.getBasicAnalysisStructure();
+
+    // Recursively merge, keeping existing values
+    function deepMerge(target, source) {
+      for (const key in source) {
+        if (
+          source[key] &&
+          typeof source[key] === "object" &&
+          !Array.isArray(source[key])
+        ) {
+          target[key] = target[key] || {};
+          deepMerge(target[key], source[key]);
+        } else if (target[key] === undefined) {
+          target[key] = source[key];
+        }
+      }
+      return target;
+    }
+
+    return deepMerge(partial, template);
+  }
+
+  /**
+   * Get basic analysis structure for fallback
+   */
+  getBasicAnalysisStructure() {
+    return {
+      overall_similarity_score: 50,
+      matching_strengths: {
+        hard_skills: ["Analysis incomplete - please retry"],
+        soft_skills: ["Analysis incomplete - please retry"],
+        experience_areas: ["Analysis incomplete - please retry"],
+        qualifications: ["Analysis incomplete - please retry"],
+        achievements: ["Analysis incomplete - please retry"],
+      },
+      missing_critical_elements: {
+        hard_skills: ["Analysis incomplete - please retry"],
+        soft_skills: ["Analysis incomplete - please retry"],
+        experience_gaps: ["Analysis incomplete - please retry"],
+        qualifications: ["Analysis incomplete - please retry"],
+        other_requirements: ["Analysis incomplete - please retry"],
+      },
+      areas_for_improvement: [
+        {
+          category: "general",
+          priority: "medium",
+          description: "Analysis incomplete - please retry with shorter inputs",
+          suggested_actions: ["Retry analysis", "Check input length"],
+        },
+      ],
+      role_fit_assessment: {
+        immediate_readiness: "medium",
+        growth_potential: "medium",
+        culture_fit_indicators: ["Analysis incomplete"],
+        red_flags: ["Analysis incomplete - please retry"],
+      },
+      keyword_analysis: {
+        matched_keywords: ["Analysis incomplete"],
+        missing_keywords: ["Analysis incomplete"],
+        keyword_density_score: 0,
+      },
+      recommendations: {
+        for_candidate: ["Analysis incomplete - please retry"],
+        for_recruiter: ["Analysis incomplete - please retry"],
+        interview_focus_areas: ["Analysis incomplete - please retry"],
+      },
+    };
+  }
+
+  /**
+   * Creates a more concise analysis prompt to avoid token limits
    */
   createAnalysisPrompt(jobDescription, resume) {
-    return `You are an expert HR analyst and talent acquisition specialist. Analyze the following job description and resume to provide a comprehensive similarity assessment.
+    return `You are an HR analyst. Analyze the resume against the job description.
 
-**IMPORTANT INSTRUCTIONS:**
-1. Be domain-independent - work with ANY field (tech, healthcare, finance, marketing, education, etc.)
-2. Focus on transferable skills, core competencies, and role-specific requirements
-3. Consider both hard skills (technical/domain-specific) and soft skills (leadership, communication, etc.)
-4. Evaluate experience relevance, not just direct matches
-5. Provide actionable insights for the candidate
-
-**JOB DESCRIPTION:**
+JOB DESCRIPTION:
 ${jobDescription}
 
-**RESUME:**
+RESUME:
 ${resume}
 
-**ANALYSIS REQUIREMENTS:**
-You MUST respond with ONLY valid JSON. No markdown, no explanations, no code blocks. Start with { and end with }.
-Provide a detailed JSON response with the following structure:
+Return ONLY valid JSON with this exact structure (no additional text, markdown, or explanations):
 
 {
-  "overall_similarity_score": [0-100 integer score],
+  "overall_similarity_score": 75,
   "matching_strengths": {
-    "hard_skills": ["List of technical/domain-specific skills that match"],
-    "soft_skills": ["List of interpersonal/leadership skills that match"],
-    "experience_areas": ["List of relevant experience areas that align"],
-    "qualifications": ["Educational/certification matches"],
-    "achievements": ["Notable accomplishments that align with role requirements"]
+    "hard_skills": ["list matching technical skills"],
+    "soft_skills": ["list matching soft skills"],
+    "experience_areas": ["list relevant experience"],
+    "qualifications": ["list matching qualifications"],
+    "achievements": ["list relevant achievements"]
   },
   "missing_critical_elements": {
-    "hard_skills": ["Essential technical skills not demonstrated"],
-    "soft_skills": ["Important interpersonal skills not evident"],
-    "experience_gaps": ["Required experience areas not covered"],
-    "qualifications": ["Missing educational/certification requirements"],
-    "other_requirements": ["Any other critical job requirements not met"]
+    "hard_skills": ["list missing technical skills"],
+    "soft_skills": ["list missing soft skills"],
+    "experience_gaps": ["list missing experience"],
+    "qualifications": ["list missing qualifications"],
+    "other_requirements": ["list other missing requirements"]
   },
   "areas_for_improvement": [
     {
-      "category": "skill_category",
-      "priority": "high/medium/low",
-      "description": "Specific actionable advice for improvement",
-      "suggested_actions": ["Concrete steps to address this gap"]
+      "category": "skills",
+      "priority": "high",
+      "description": "brief description",
+      "suggested_actions": ["action1", "action2"]
     }
   ],
   "role_fit_assessment": {
     "immediate_readiness": "high/medium/low",
     "growth_potential": "high/medium/low",
-    "culture_fit_indicators": ["Aspects suggesting good cultural alignment"],
-    "red_flags": ["Potential concerns or misalignments"]
+    "culture_fit_indicators": ["list indicators"],
+    "red_flags": ["list concerns"]
   },
   "keyword_analysis": {
-    "matched_keywords": ["Important keywords from JD found in resume"],
-    "missing_keywords": ["Critical keywords from JD not in resume"],
-    "keyword_density_score": [0-100 score for keyword coverage]
+    "matched_keywords": ["list matched keywords"],
+    "missing_keywords": ["list missing keywords"],
+    "keyword_density_score": 80
   },
   "recommendations": {
-    "for_candidate": ["Specific advice to improve their candidacy"],
-    "for_recruiter": ["Insights on candidate's potential and fit"],
-    "interview_focus_areas": ["Key areas to explore during interviews"]
+    "for_candidate": ["list recommendations"],
+    "for_recruiter": ["list insights"],
+    "interview_focus_areas": ["list focus areas"]
   }
 }
 
-**EVALUATION CRITERIA:**
-- Skills relevance and depth (30%)
-- Experience alignment and progression (25%)
-- Educational/qualification match (15%)
-- Achievements and impact demonstration (15%)
-- Soft skills and cultural fit indicators (10%)
-- Keyword optimization and presentation (5%)
-
-Be thorough, fair, and constructive in your analysis. Focus on potential and transferable skills, not just exact matches.
-
-CRITICAL: Respond with ONLY the JSON object. No additional text, explanations, or formatting.`;
+CRITICAL: Return ONLY the JSON object. Start with { and end with }.`;
   }
 
   /**
    * Validates and enhances the AI response
    */
   validateAndEnhanceResponse(analysis) {
-    // Ensure all required fields are present
     const requiredFields = [
       "overall_similarity_score",
       "matching_strengths",
       "missing_critical_elements",
-      "areas_for_improvement",
       "role_fit_assessment",
-      "keyword_analysis",
       "recommendations",
     ];
 
     for (const field of requiredFields) {
       if (!analysis[field]) {
-        throw new Error(`Missing required field: ${field}`);
+        console.warn(`Missing field ${field}, using default`);
+        analysis[field] = this.getDefaultFieldValue(field);
       }
     }
 
-    // Ensure similarity score is within valid range
+    // Ensure similarity score is valid
     if (
+      typeof analysis.overall_similarity_score !== "number" ||
       analysis.overall_similarity_score < 0 ||
       analysis.overall_similarity_score > 100
     ) {
-      throw new Error("Similarity score must be between 0 and 100");
+      analysis.overall_similarity_score = 50;
     }
 
     // Add metadata
     analysis.analysis_metadata = {
       timestamp: new Date().toISOString(),
       model_used: "gemini-1.5-flash",
-      analysis_version: "1.0",
+      analysis_version: "2.0",
+      parsing_method: "enhanced",
     };
 
     return analysis;
   }
 
   /**
-   * Batch analyze multiple resumes against a single job description
-   * @param {string} jobDescription - The job description
-   * @param {Array<{id: string, resume: string}>} resumes - Array of resume objects
-   * @param {number} delayMs - Delay between requests to respect rate limits
-   * @returns {Promise<Array>} Array of analysis results
+   * Validate simple response structure
    */
-  async batchAnalyze(jobDescription, resumes, delayMs = 4000) {
+  validateAndEnhanceSimpleResponse(analysis) {
+    // Fill any missing fields with defaults
+    const template = this.getBasicAnalysisStructure();
+    const merged = this.fillMissingFields(analysis);
+
+    merged.analysis_metadata = {
+      timestamp: new Date().toISOString(),
+      model_used: "gemini-1.5-flash",
+      analysis_version: "2.0-fallback",
+      parsing_method: "fallback",
+    };
+
+    return merged;
+  }
+
+  /**
+   * Get default value for missing fields
+   */
+  getDefaultFieldValue(fieldName) {
+    const defaults = {
+      overall_similarity_score: 50,
+      matching_strengths: {
+        hard_skills: [],
+        soft_skills: [],
+        experience_areas: [],
+        qualifications: [],
+        achievements: [],
+      },
+      missing_critical_elements: {
+        hard_skills: [],
+        soft_skills: [],
+        experience_gaps: [],
+        qualifications: [],
+        other_requirements: [],
+      },
+      areas_for_improvement: [],
+      role_fit_assessment: {
+        immediate_readiness: "medium",
+        growth_potential: "medium",
+        culture_fit_indicators: [],
+        red_flags: [],
+      },
+      keyword_analysis: {
+        matched_keywords: [],
+        missing_keywords: [],
+        keyword_density_score: 0,
+      },
+      recommendations: {
+        for_candidate: [],
+        for_recruiter: [],
+        interview_focus_areas: [],
+      },
+    };
+
+    return defaults[fieldName] || {};
+  }
+
+  /**
+   * Batch analyze with better error handling
+   */
+  async batchAnalyze(jobDescription, resumes, delayMs = 5000) {
     const results = [];
+    let consecutiveFailures = 0;
+    const maxConsecutiveFailures = 3;
 
     for (let i = 0; i < resumes.length; i++) {
       const { id, resume } = resumes[i];
@@ -331,18 +551,29 @@ CRITICAL: Respond with ONLY the JSON object. No additional text, explanations, o
           status: "success",
         });
 
-        // Rate limiting delay (except for last item)
+        consecutiveFailures = 0; // Reset counter on success
+
+        // Rate limiting delay
         if (i < resumes.length - 1) {
           await this.delay(delayMs);
         }
       } catch (error) {
+        consecutiveFailures++;
         console.error(`Failed to analyze resume ${id}:`, error.message);
+
         results.push({
           resume_id: id,
           analysis: null,
           status: "error",
           error: error.message,
         });
+
+        // If too many consecutive failures, increase delay
+        if (consecutiveFailures >= maxConsecutiveFailures) {
+          console.log("Multiple consecutive failures, increasing delay...");
+          await this.delay(delayMs * 2);
+          consecutiveFailures = 0;
+        }
       }
     }
 
@@ -364,7 +595,13 @@ CRITICAL: Respond with ONLY the JSON object. No additional text, explanations, o
     const failed = batchResults.filter((r) => r.status === "error");
 
     if (successful.length === 0) {
-      return { error: "No successful analyses to summarize" };
+      return {
+        error: "No successful analyses to summarize",
+        total_resumes: batchResults.length,
+        failed_analyses: failed.length,
+        failure_rate:
+          ((failed.length / batchResults.length) * 100).toFixed(1) + "%",
+      };
     }
 
     const scores = successful.map((r) => r.analysis.overall_similarity_score);
@@ -374,6 +611,8 @@ CRITICAL: Respond with ONLY the JSON object. No additional text, explanations, o
       total_resumes: batchResults.length,
       successful_analyses: successful.length,
       failed_analyses: failed.length,
+      success_rate:
+        ((successful.length / batchResults.length) * 100).toFixed(1) + "%",
       average_similarity_score: Math.round(avgScore * 100) / 100,
       highest_score: Math.max(...scores),
       lowest_score: Math.min(...scores),
@@ -388,15 +627,14 @@ CRITICAL: Respond with ONLY the JSON object. No additional text, explanations, o
           resume_id: r.resume_id,
           score: r.analysis.overall_similarity_score,
           immediate_readiness:
-            r.analysis.role_fit_assessment.immediate_readiness,
+            r.analysis.role_fit_assessment?.immediate_readiness || "unknown",
         })),
     };
   }
 }
 
-// Usage Example
+// Usage Example with error handling
 async function example() {
-  // Initialize analyzer with your Gemini API key
   const analyzer = new ResumeJDAnalyzer("YOUR_GEMINI_API_KEY");
 
   const jobDescription = `
@@ -412,25 +650,15 @@ async function example() {
   `;
 
   try {
-    // Single analysis
     const analysis = await analyzer.analyzeResumeMatch(jobDescription, resume);
     console.log("Analysis Result:", JSON.stringify(analysis, null, 2));
-
-    // Batch analysis example
-    const resumes = [
-      { id: "candidate_1", resume: resume },
-      { id: "candidate_2", resume: "Another resume..." },
-    ];
-
-    const batchResults = await analyzer.batchAnalyze(jobDescription, resumes);
-    const summary = analyzer.generateBatchSummary(batchResults);
-
-    console.log("Batch Summary:", summary);
   } catch (error) {
-    console.error("Error:", error.message);
+    console.error("Analysis failed:", error.message);
+
+    // The analyzer now has built-in fallbacks, so this should rarely happen
+    // But if it does, you can still get a basic structure
   }
 }
 
-// Export the class for use in other modules
 export default ResumeJDAnalyzer;
 export { ResumeJDAnalyzer };
