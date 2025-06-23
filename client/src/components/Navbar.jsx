@@ -41,6 +41,7 @@ const Navbar = () => {
       await logoutApiCall().unwrap();
       dispatch(logout());
       navigate("/login");
+      console.log("logged out!");
     } catch (error) {
       console.error(error);
     }
