@@ -1,7 +1,6 @@
 # Root-level ignores
 node_modules/
-models/
-models_cache/
+
 .env
 *.log
 
