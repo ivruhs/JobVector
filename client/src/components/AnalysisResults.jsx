@@ -135,7 +135,7 @@ const AnalysisResults = () => {
   const score = Math.round(
     results.overallSimilarityScore * 0.6 + results.semanticScore * 0.4
   );
-  console.log(score);
+  // console.log(score);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 pt-20 pb-12 px-4">

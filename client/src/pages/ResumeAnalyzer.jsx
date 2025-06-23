@@ -69,7 +69,7 @@ const ResumeAnalyzer = () => {
         if (result && result.parsedText) {
           setParsedText(result.parsedText);
           setEditedText(result.parsedText);
-          console.log("Parsed text set successfully!");
+          // console.log("Parsed text set successfully!");
         } else {
           console.error("No parsedText found in result");
           setErrors({ resume: "PDF uploaded but no text could be extracted." });
@@ -134,7 +134,7 @@ const ResumeAnalyzer = () => {
 
       // Navigate to results page with the analysis data
       if (result.success && result.data) {
-        console.log(result.data);
+        // console.log(result.data);
         // Navigate to results page and pass the data via state
         navigate("/analysis-results", {
           state: { analysisResults: result.data },

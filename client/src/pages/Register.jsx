@@ -9,7 +9,7 @@ import { setCredentials } from "../redux/features/auth/authSlice";
 import { toast } from "react-toastify";
 import { useDispatch, useSelector } from "react-redux";
 
-console.log(motion);
+// console.log(motion);
 
 const Register = () => {
   const [formData, setFormData] = useState({

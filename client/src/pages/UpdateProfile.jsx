@@ -20,7 +20,7 @@ import { Link } from "react-router-dom";
 
 const UpdateProfile = () => {
   const { userInfo } = useSelector((state) => state.auth);
-  console.log(motion);
+  // console.log(motion);
   const [formData, setFormData] = useState({
     username: userInfo.username,
     email: userInfo.email,

@@ -9,7 +9,7 @@ import { useDispatch } from "react-redux";
 import { useLogoutMutation } from "../redux/api/usersApiSlice";
 import { logout } from "../redux/features/auth/authSlice";
 
-console.log(motion);
+// console.log(motion);
 
 const Navbar = () => {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -68,7 +68,7 @@ const Navbar = () => {
           <motion.div whileHover={{ scale: 1.05 }} className="flex-shrink-0">
             <Link to="/">
               <img
-                src="../src/components/Screenshot_2025-06-22_at_9.22.00_PM-removebg-preview.png" // <-- Replace with your actual image path
+                src="/logo.png"
                 alt="MyApp Logo"
                 className="h-12 w-auto" // <-- Adjust size as needed
               />

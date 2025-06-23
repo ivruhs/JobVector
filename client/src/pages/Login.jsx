@@ -10,7 +10,7 @@ import { useLoginMutation } from "../redux/api/usersApiSlice";
 import { setCredentials } from "../redux/features/auth/authSlice";
 import { toast } from "react-toastify";
 
-console.log(motion);
+// console.log(motion);
 
 const Login = () => {
   const [formData, setFormData] = useState({
@@ -60,7 +60,7 @@ const Login = () => {
 
     try {
       const res = await login(formData).unwrap();
-      console.log(res);
+      // console.log(res);
       dispatch(setCredentials({ ...res }));
       navigate("/");
     } catch (err) {
