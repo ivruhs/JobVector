@@ -338,10 +338,10 @@ function combineMissingSkills(result) {
 
     // Combine other requirements
     if (
-      result.missing_critical_elements?.other_requirements &&
-      Array.isArray(result.missing_critical_elements.other_requirements)
+      result.missing_critical_elements?.domain_knowledge &&
+      Array.isArray(result.missing_critical_elements.domain_knowledge)
     ) {
-      missing.push(...result.missing_critical_elements.other_requirements);
+      missing.push(...result.missing_critical_elements.domain_knowledge);
     }
 
     // Remove duplicates and return

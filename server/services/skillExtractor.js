@@ -4,12 +4,12 @@ class ResumeJDAnalyzer {
   constructor(apiKey) {
     this.genAI = new GoogleGenerativeAI(apiKey);
     this.model = this.genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.1, // Reduced for more consistent output
         topP: 0.8,
         topK: 30,
-        maxOutputTokens: 4096, // Reduced to prevent truncation
+        maxOutputTokens: 5096, // Reduced to prevent truncation
         responseMimeType: "application/json",
       },
     });
@@ -86,16 +86,9 @@ Return exactly this JSON structure with no additional text:
     "qualifications": ["missing qualification"],
     "other_requirements": ["other missing items"]
   },
-  "role_fit_assessment": {
-    "immediate_readiness": "medium",
-    "growth_potential": "high",
-    "culture_fit_indicators": ["positive indicators"],
-    "red_flags": ["potential concerns"]
-  },
   "recommendations": {
     "for_candidate": ["improve skill X"],
     "for_recruiter": ["focus on Y during interview"],
-    "interview_focus_areas": ["area1", "area2"]
   }
 }`;
 
@@ -236,10 +229,11 @@ Return exactly this JSON structure with no additional text:
   cleanJsonString(text) {
     return text
       .replace(/```json\s*/g, "")
-      .replace(/```\s*$/g, "")
-      .replace(/,\s*}/g, "}")
-      .replace(/,\s*]/g, "]")
-      .replace(/\n\s*/g, " ")
+      .replace(/```/g, "")
+      .replace(/,\s*([}\]])/g, "$1") // Remove trailing commas
+      .replace(/[\r\n]+/g, " ") // Replace newlines with space
+      .replace(/\\n/g, " ") // Unescaped newline characters
+      .replace(/\s{2,}/g, " ") // Collapse extra spaces
       .trim();
   }
 
@@ -247,23 +241,28 @@ Return exactly this JSON structure with no additional text:
    * Fix truncated JSON by removing incomplete fields
    */
   fixTruncatedJson(text) {
-    if (!text.startsWith("{")) return text;
+    let startIndex = text.indexOf("{");
+    if (startIndex === -1) return text;
 
-    // Find the last complete comma-separated field
-    let lastCommaIndex = text.lastIndexOf(",");
-    let lastColonIndex = text.lastIndexOf(":");
+    let braceCount = 0;
+    let endIndex = -1;
 
-    if (lastColonIndex > lastCommaIndex) {
-      // Remove incomplete field
-      text = text.substring(0, lastCommaIndex);
+    for (let i = startIndex; i < text.length; i++) {
+      if (text[i] === "{") braceCount++;
+      else if (text[i] === "}") braceCount--;
+
+      if (braceCount === 0) {
+        endIndex = i + 1;
+        break;
+      }
     }
 
-    // Ensure proper closing
-    if (!text.endsWith("}")) {
-      text += "}";
+    if (endIndex !== -1) {
+      return text.slice(startIndex, endIndex);
     }
 
-    return text;
+    // If closing brace not found, return best-effort fix
+    return text.slice(startIndex) + "}".repeat(braceCount);
   }
 
   /**
@@ -376,59 +375,90 @@ Return exactly this JSON structure with no additional text:
    * Creates a more concise analysis prompt to avoid token limits
    */
   createAnalysisPrompt(jobDescription, resume) {
-    return `You are an HR analyst. Analyze the resume against the job description.
-
-JOB DESCRIPTION:
-${jobDescription}
-
-RESUME:
-${resume}
-
-Return ONLY valid JSON with this exact structure (no additional text, markdown, or explanations):
-
-{
+    return `You are an expert HR analyst and ATS system. Carefully analyze the resume against the job description and provide a precise similarity score based on strict criteria.
+ 
+ 
+ JOB DESCRIPTION:
+ ${jobDescription}
+ 
+ 
+ RESUME:
+ ${resume}
+ 
+ 
+ CRITICAL SCORING GUIDELINES - Be precise and strict:
+ 
+ 
+ 🎯 PERFECT MATCH (85-100 points):
+ - 90%+ of required skills are present and well-demonstrated
+ - Experience level matches or exceeds requirements
+ - Job title/role closely aligns with target position
+ - Industry experience is directly relevant
+ - Educational requirements fully met
+ - Strong evidence of achievements in similar roles
+ 
+ 
+ ⭐ GOOD MATCH (70-84 points):
+ - 70-89% of required skills are present
+ - Experience level is adequate (within 1-2 years of requirement)
+ - Role has significant overlap with target position
+ - Most qualifications are met
+ - Some relevant industry experience
+ 
+ 
+ 🔶 MODERATE MATCH (50-69 points):
+ - 40-69% of required skills are present
+ - Experience level has some gaps but shows potential
+ - Role has partial overlap or transferable skills
+ - Some qualifications missing but core competencies exist
+ - Limited but relevant experience
+ 
+ 
+ ⚠️ WEAK MATCH (25-49 points):
+ - 20-39% of required skills are present
+ - Significant experience gaps
+ - Role requires substantial upskilling
+ - Major qualifications missing
+ - Minimal relevant experience
+ 
+ 
+ ❌ POOR MATCH (0-24 points):
+ - <20% of required skills are present
+ - Completely different field or role
+ - No relevant experience
+ - Missing critical qualifications
+ - Not suitable for the position
+ 
+ 
+ IMPORTANT: Return ONLY valid JSON. Use proper escaping for quotes in strings. Do not include newlines within string values.
+ 
+ 
+ {
   "overall_similarity_score": 75,
   "matching_strengths": {
-    "hard_skills": ["list matching technical skills"],
-    "soft_skills": ["list matching soft skills"],
-    "experience_areas": ["list relevant experience"],
-    "qualifications": ["list matching qualifications"],
-    "achievements": ["list relevant achievements"]
+    "hard_skills": ["list specific matching technical skills from resume"],
+    "soft_skills": ["list specific matching soft skills from resume"],
+    "experience_areas": ["list relevant experience areas that match job requirements"],
+    "qualifications": ["list matching educational/certification qualifications"],
+    "achievements": ["list relevant achievements that align with job needs"]
   },
   "missing_critical_elements": {
-    "hard_skills": ["list missing technical skills"],
-    "soft_skills": ["list missing soft skills"],
-    "experience_gaps": ["list missing experience"],
-    "qualifications": ["list missing qualifications"],
-    "other_requirements": ["list other missing requirements"]
-  },
-  "areas_for_improvement": [
-    {
-      "category": "skills",
-      "priority": "high",
-      "description": "brief description",
-      "suggested_actions": ["action1", "action2"]
-    }
-  ],
-  "role_fit_assessment": {
-    "immediate_readiness": "high/medium/low",
-    "growth_potential": "high/medium/low",
-    "culture_fit_indicators": ["list indicators"],
-    "red_flags": ["list concerns"]
-  },
-  "keyword_analysis": {
-    "matched_keywords": ["list matched keywords"],
-    "missing_keywords": ["list missing keywords"],
-    "keyword_density_score": 80
+    "hard_skills": ["list specific missing technical skills mentioned in job description"],
+    "soft_skills": ["list missing soft skills from job requirements"],
+    "experience_gaps": ["list missing experience areas or insufficient experience level"],
+    "qualifications": ["list missing educational/certification requirements"],
+    "other_requirements": ["list any other missing job requirements"]
   },
   "recommendations": {
-    "for_candidate": ["list recommendations"],
-    "for_recruiter": ["list insights"],
-    "interview_focus_areas": ["list focus areas"]
+    "for_candidate": ["specific recommendations for candidate to improve fit"],
+    "for_recruiter": ["insights for recruiter about this candidate"],
   }
-}
-
-CRITICAL: Return ONLY the JSON object. Start with { and end with }.`;
+ }
+  CRITICAL: Return ONLY the JSON object. Start with { and end with }.
+  IMPORTANT:
+  - Output ONLY the JSON object. No explanations, no preambles, no markdown (e.g. don't wrap in json)
+  - Do not insert newlines in string values.
+  - Output should start with { and end with }`;
   }
 
   /**
@@ -662,3 +692,55 @@ async function example() {
 
 export default ResumeJDAnalyzer;
 export { ResumeJDAnalyzer };
+
+//  {
+//   "overall_similarity_score": 5,
+//   "matching_strengths": {
+//     "hard_skills": [],
+//     "soft_skills": [],
+//     "experience_areas": [],
+//     "qualifications": [],
+//     "achievements": []
+//   },
+//   "missing_critical_elements": {
+//     "hard_skills": [
+//       "English literature lesson planning and delivery",
+//       "grammar lesson planning and delivery",
+//       "standardized exam preparation",
+//       "college readiness preparation",
+//       "student performance evaluation",
+//       "progress report maintenance",
+//       "curriculum development",
+//       "educational technology platforms familiarity"
+//     ],
+//     "soft_skills": [
+//       "classroom management skills",
+//       "fostering a positive learning environment"
+//     ],
+//     "experience_gaps": [
+//       "3+ years of classroom teaching experience (grades 9-12)"
+//     ],
+//     "qualifications": [
+//       "Bachelor’s degree in English or Education",
+//       "Teaching license or certification (State of CA)"
+//     ],
+//     "other_requirements": []
+//   },
+//   "recommendations": {
+//     "for_candidate": [
+//       "Pursue roles aligned with photography and visual arts.",
+//       "If interested in teaching, acquire a relevant Bachelor's degree, teaching certification, and gain practical classroom experience."
+//     ],
+//     "for_recruiter": [
+//       "This candidate is not suitable for the High School English Teacher position due to a complete lack of relevant experience, education, and certification.",
+//       "Do not proceed with this application."
+//     ],
+
+//   },
+//   "analysis_metadata": {
+//     "timestamp": "2025-06-23T12:34:56.841Z",
+//     "model_used": "gemini-1.5-flash",
+//     "analysis_version": "2.0",
+//     "parsing_method": "enhanced"
+//   }
+// }
