@@ -52,7 +52,7 @@ const Home = () => {
     },
     {
       feature: "🧠 Embedding Generation",
-      tech: "Hugging Face Transformers (MiniLM)",
+      tech: "Gemini Text-Embedding-04 Model",
       icon: Brain,
     },
     {
@@ -89,7 +89,7 @@ const Home = () => {
       number: "02",
       title: "AI Embedding Generation",
       description:
-        "Uses 384-dimension sentence embeddings via Hugging Face model. Stored in Supabase vector DB",
+        "Uses 768-dimension sentence embeddings via Gemini text-embeddings-04 model. Stored in Supabase vector DB",
       icon: Brain,
       color: "from-purple-500 to-pink-500",
     },
@@ -638,7 +638,7 @@ const Home = () => {
                 <span className="text-sm text-gray-400">Built with</span>
                 <Heart className="text-red-500" size={16} />
                 <span className="text-sm text-gray-400">
-                  using MERN, Hugging Face, Supabase, Gemini AI
+                  using MERN, Groq AI (llama), Supabase, Gemini AI
                 </span>
               </div>
             </div>
