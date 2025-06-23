@@ -126,7 +126,7 @@ const AnalysisResults = () => {
     if (score >= 70) {
       return "Excellent match! Your resume aligns very well with the job requirements.";
     } else if (score > 40) {
-      return "Good match with room for improvement. Consider addressing the skill gaps below.";
+      return "Partial match with room for improvement. Consider addressing the skill gaps below.";
     } else {
       return "Poor match. Significant skill development may be needed for this role.";
     }
@@ -136,10 +136,10 @@ const AnalysisResults = () => {
 
   if (
     results.overallSimilarityScore > 78 ||
-    results.overallSimilarityScore < 36
+    results.overallSimilarityScore < 35
   ) {
     score = Math.round(
-      results.overallSimilarityScore * 0.6 + results.semanticScore * 0.4
+      results.overallSimilarityScore * 0.7 + results.semanticScore * 0.3
     );
   } else if (
     results.overallSimilarityScore >= 36 &&
@@ -392,6 +392,9 @@ const AnalysisResults = () => {
               <span>Download Report</span>
             </motion.button>
           </div>
+          <p className="text-gray-600 mt-4">
+            JobVector can make mistakes. Check important info.
+          </p>
         </motion.div>
       </motion.div>
     </div>
