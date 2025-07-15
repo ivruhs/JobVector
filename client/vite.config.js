@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/api/": "http://localhost:8000/",
+      "/api/": "https://job-vector-server.vercel.app/",
     },
   },
 });
