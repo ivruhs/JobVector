@@ -47,7 +47,5 @@ app.use("/api/skills", skillRoutes);
 app.use("/api/ai", completeAnalysisRoutes);
 app.use(errorHandler);
 
-app.listen(port, () => console.log(`Server running on port: ${port}`));
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-});
+// ✅ EXPORT the app
+export default app;
