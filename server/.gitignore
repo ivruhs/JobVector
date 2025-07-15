@@ -1,0 +1,10 @@
+# Root-level ignores
+node_modules/
+
+.env
+*.log
+
+# Ignore Vite build in client
+client/node_modules/
+client/dist/
+
