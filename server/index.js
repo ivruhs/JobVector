@@ -33,7 +33,7 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    origin: "https://job-vector.vercel.app/", // ✅ Your frontend URL
+    origin: "https://job-vector.vercel.app", // ✅ Your frontend URL
     credentials: true, // ✅ If you're sending cookies
   })
 );
